@@ -2,22 +2,53 @@ import pandas as pd
 import numpy as np	  	   		 	   			  		 			     			  	 
 from util import get_data
 
+def author():
+    return 'mnavazhylau3'
+
+def get_order_book_from_df_trades(df_trades):
+    df_trades_symbol = df_trades.columns[0]
+    df_trades_order_book = df_trades.loc[df_trades[df_trades_symbol] != 0].copy()
+
+    complete_order_frame = {
+        "Date": [],
+        "Symbol": [],
+        "Order": [],
+        "Shares": []
+    }
+
+    for idx,row in df_trades_order_book.iterrows():
+        shares = row[df_trades_symbol]
+        
+        order_type = "BUY"
+        if shares < 0:
+            order_type = "SELL"
+            
+        complete_order_frame["Date"].append(pd.Timestamp(idx))
+        complete_order_frame["Symbol"].append(df_trades_symbol)
+        complete_order_frame["Order"].append(order_type)
+        complete_order_frame["Shares"].append(abs(shares))
+        
+    return pd.DataFrame(complete_order_frame)
+
 def compute_portvals_from_tradedf(
     df_trades,
     start_val=1000000,  		  	   		 	   			  		 			     			  	 
     commission=9.95,  		  	   		 	   			  		 			     			  	 
     impact=0.005, 
 ):
-    pass
-
-def author():
-    return 'mnavazhylau3'
+    min_date = df_trades.index.min()
+    max_date = df_trades.index.max()
+    orders = get_order_book_from_df_trades(df_trades)
+    return compute_portvals(orders, min_date, max_date, start_val, commission, impact)
 
 def compute_portvals(  		  	   		 	   			  		 			     			  	 
-    orders_file="./orders/orders.csv",  		  	   		 	   			  		 			     			  	 
+    orders,  		 
+    sd,
+    ed,  	   		 	   			  		 			     			  	 
     start_val=1000000,  		  	   		 	   			  		 			     			  	 
     commission=9.95,  		  	   		 	   			  		 			     			  	 
-    impact=0.005,  		  	   		 	   			  		 			     			  	 
+    impact=0.005,
+ 		  	   		 	   			  		 			     			  	 
 ):  		  	   		 	   			  		 			     			  	 
     """  		  	   		 	   			  		 			     			  	 
     Computes the portfolio values.  		  	   		 	   			  		 			     			  	 
@@ -34,13 +65,8 @@ def compute_portvals(
     :rtype: pandas.DataFrame  		  	   		 	   			  		 			     			  	 
     """  		  	   		 	   			  		 			     			  	 
     
-    # Load in the orders
-    orders = pd.read_csv(orders_file)
-    orders['Date'] = pd.to_datetime(orders['Date'])
-    orders = orders.sort_values(by='Date', ascending=True)
-
-    min_date = orders['Date'].min()
-    max_date = orders['Date'].max()
+    min_date = sd
+    max_date = ed
     ticker_symbols = list(orders['Symbol'].unique())
     stock_date_range = pd.date_range(min_date, max_date)
 
