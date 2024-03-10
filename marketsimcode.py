@@ -64,71 +64,53 @@ def compute_portvals(
     :return: the result (portvals) as a single-column dataframe, containing the value of the portfolio for each trading day in the first column from start_date to end_date, inclusive.  		  	   		 	   			  		 			     			  	 
     :rtype: pandas.DataFrame  		  	   		 	   			  		 			     			  	 
     """  		  	   		 	   			  		 			     			  	 
-    
-    min_date = sd
-    max_date = ed
+        
     ticker_symbols = list(orders['Symbol'].unique())
-    stock_date_range = pd.date_range(min_date, max_date)
-
-    pertinent_stock_data = get_data(ticker_symbols, stock_date_range)
-    pertinent_stock_data.drop(columns=['SPY'], inplace=True)
-
-    pertinent_stock_data_with_filled_data = pd.DataFrame({'Date': pd.date_range(min_date, max_date) }).set_index('Date').join(pertinent_stock_data).fillna(method='ffill')
-
-    shares_dataframe = pd.DataFrame({'Date': pd.date_range(min_date, max_date) })
-
+    stock_date_range = pd.date_range(sd, ed)
+    ticker_data = get_data(ticker_symbols, stock_date_range, addSPY=False).dropna()
+    tradable_days = list(ticker_data.index)
+    
+    shares_dataframe = pd.DataFrame({'Date': pd.to_datetime(tradable_days) })
     shares_dataframe['Cash'] = np.nan
-    shares_dataframe.loc[0,'Cash'] = start_val
+
+    stock_holdings = {}
+    stock_holding_np = {}
+    cash_impact_array = np.full(len(orders), 0, dtype=float)
+        
+    for ticker_symbol in ticker_symbols:
+        shares_dataframe[ticker_symbol] = np.nan
+        
+        stock_holdings[ticker_symbol] = 0
+        stock_holding_np[ticker_symbol] = np.full(len(orders), 0, dtype=int)
+
+    orders['order_amount'] = np.where(orders['Order'] == "BUY", orders['Shares'], -orders['Shares'])
+    cash_impact_array = -orders.apply(lambda x: (x['order_amount'] * float(ticker_data.loc[x['Date']][x['Symbol']])) + abs(impact * x['order_amount'] * float(ticker_data.loc[x['Date']][x['Symbol']])) + commission, axis=1).values
+
+    for idx, row in orders.iterrows():
+        stock_holding_np[row['Symbol']][idx] = row['order_amount']
+        
+    cumsum_df = pd.DataFrame({'Date': pd.to_datetime(orders['Date']) })
+    cumsum_df['Cash'] = start_val + np.cumsum(cash_impact_array)
+    
+    for ticker_symbol in ticker_symbols:
+        cumsum_df[ticker_symbol] = np.cumsum(stock_holding_np[ticker_symbol])
+        
+    merged_dataframe = pd.merge(shares_dataframe, cumsum_df, on='Date', how='left', suffixes=('', '_cumsum'))
+    shares_dataframe['Cash'] = merged_dataframe['Cash_cumsum'] 
 
     for ticker in ticker_symbols:
-        shares_dataframe[ticker] = np.nan
-        shares_dataframe.loc[0,ticker] = 0
-        
-    # Convert 'Date' column to datetime type in shares_dataframe DataFrame
-    shares_dataframe['Date'] = pd.to_datetime(shares_dataframe['Date'])
+        shares_dataframe[ticker] = merged_dataframe[ticker + "_cumsum"]
 
-    for _, row in orders.iterrows():    
-        order_date = row['Date']
-        order_symbol = row['Symbol']
-        shares_amount = row['Shares']
-        order_type = row['Order']
+    if shares_dataframe.iloc[0].isna().any():
+        shares_dataframe['Cash'].iloc[0] = start_val
         
-        previous_order_date = order_date - pd.Timedelta(days=1)
-        shares_dataframe.loc[shares_dataframe['Date'] <= previous_order_date] = shares_dataframe.loc[shares_dataframe['Date'] <= previous_order_date].fillna(method='ffill')
-        
-        if (shares_dataframe.loc[shares_dataframe['Date'] == order_date, order_symbol].isnull().values.any() and not shares_dataframe.loc[shares_dataframe['Date'] == previous_order_date,order_symbol].empty):
-            previous_stock_amount = shares_dataframe.loc[shares_dataframe['Date'] == previous_order_date, order_symbol].iloc[0]
-            shares_dataframe.loc[shares_dataframe['Date'] == order_date, order_symbol] = previous_stock_amount
+        for ticker_symbol in ticker_symbols:
+            shares_dataframe[ticker_symbol].iloc[0] = 0
             
-        if (shares_dataframe.loc[shares_dataframe['Date'] == order_date, 'Cash'].isnull().values.any() and not shares_dataframe.loc[shares_dataframe['Date'] == previous_order_date,'Cash'].empty):
-            previous_order_cash = shares_dataframe.loc[shares_dataframe['Date'] == previous_order_date, 'Cash'].iloc[0]
-            shares_dataframe.loc[shares_dataframe['Date'] == order_date, 'Cash'] = previous_order_cash
-        
-        if order_type == "BUY":
-            order_amount = shares_amount
-        else:
-            order_amount = -shares_amount
 
-        share_cost = float(pertinent_stock_data.loc[order_date][order_symbol])
-        order_cost = share_cost * order_amount
-            
-        current_shares = float(shares_dataframe.loc[shares_dataframe['Date'] == order_date, order_symbol].iloc[0])
-        current_cash = float(shares_dataframe.loc[shares_dataframe['Date'] == order_date,'Cash'].iloc[0])
-        
-        shares_dataframe.loc[shares_dataframe['Date'] == order_date,order_symbol] = current_shares + order_amount
-        shares_dataframe.loc[shares_dataframe['Date'] == order_date,'Cash'] = current_cash - order_cost - abs(impact * order_cost) - commission
-        
-    shares_dataframe.ffill(inplace=True)  
+    shares_dataframe.ffill(inplace=True)
 
-    full_value_dataframe = shares_dataframe.copy()
-    full_value_dataframe[ticker_symbols] = shares_dataframe[ticker_symbols].multiply(pertinent_stock_data_with_filled_data[ticker_symbols].values, axis='index')
-    
-    df1 = pd.DataFrame({"Date": full_value_dataframe['Date'], "Values": full_value_dataframe.sum(axis=1).values})
-    df2 = pd.DataFrame({"Date": list(pertinent_stock_data.index)})
-
-    daily_port_val = pd.merge(df1, df2, on="Date")
-
-    # Set "Date" as the index of the daily_port_val dataframe
-    daily_port_val.set_index("Date", inplace=True)
-     	   			  		 			     			     			  	 
-    return pd.DataFrame(index=daily_port_val.index, data=daily_port_val.values)
+    for ticker in ticker_symbols:
+        shares_dataframe[ticker] = shares_dataframe[ticker].values * ticker_data[ticker].values
+                                            
+    return pd.DataFrame(index=shares_dataframe['Date'], data=shares_dataframe.sum(axis=1).values)
